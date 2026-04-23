@@ -412,6 +412,9 @@ def push_strava(
     retry_failed: bool = typer.Option(
         False, "--retry-failed", help="Retry previously failed uploads"
     ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-upload activities even if already marked as uploaded"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Upload downloaded FIT files to Strava."""
@@ -421,7 +424,13 @@ def push_strava(
     strava, rate_limiter = _make_strava_client(settings)
     state = StateManager(settings.archive_dir)
 
-    if retry_failed:
+    if force:
+        pending = [
+            r for r in state.records.values()
+            if r.downloaded_from == "garmin" and r.file_path
+        ]
+        console.print(f"Force re-uploading [bold]{len(pending)}[/bold] activities...")
+    elif retry_failed:
         pending = state.failed_strava_uploads()
         console.print(f"Retrying [bold]{len(pending)}[/bold] previously failed uploads...")
     else:
