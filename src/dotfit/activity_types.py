@@ -75,6 +75,8 @@ GARMIN_TO_STRAVA: dict[str, str | None] = {
 SKIP_UPLOAD_TYPES: set[str] = {
     "stopwatch",
     "stop_watch",
+    "breathwork",
+    "meditation",
 }
 
 # Strava workout_type enum values by sport
