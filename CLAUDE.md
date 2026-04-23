@@ -22,7 +22,8 @@ src/dotfit/
   state.py              # .state.json v2 persistence (atomic writes, v1 migration)
   ratelimit.py          # strava API rate-limit tracker from response headers
   archive.py            # archive/activities/YYYY/MM/ layout (garmin + strava naming)
-  activity_types.py     # garmin→strava type mapping, source inference from external_id
+  activity_types.py     # garmin→strava type mapping, source inference, skip list (stopwatch)
+  fit_utils.py          # FIT file inspection (interval/workout detection via fitparse)
   config.py             # pydantic-settings from env/.env
 tests/                  # pytest, uses tmp_path fixtures, mocked HTTP, no real API calls
 ```
@@ -33,7 +34,7 @@ tests/                  # pytest, uses tmp_path fixtures, mocked HTTP, no real A
 dotfit pull-garmin      # download FIT files from Garmin Connect
 dotfit pull-strava      # download original files from Strava (for Coros etc.)
 dotfit push-strava      # upload FIT files to Strava
-dotfit sync             # pull-garmin + pull-strava + push-strava
+dotfit sync             # pull-garmin + push-strava
 dotfit upload FILE      # upload a single FIT file (not tracked in state)
 dotfit status           # show sync progress
 dotfit auth garmin      # authenticate with Garmin Connect
@@ -49,6 +50,9 @@ dotfit auth strava-cookie  # test/validate session cookie for pull-strava
 - **browser-cookie3 is optional** — `pip install dotfit[browser]`. Falls back to `STRAVA_SESSION_COOKIE` env var.
 - **Config at `~/.config/dotfit/`** — tokens stored here, separate from the archive dir.
 - **pull-strava is primarily for Coros** — watches that auto-sync to Strava but have no export API.
+- **Workout tagging** — track running (by type or name), structured workouts (workout_step in FIT), and manual-lap intervals (3+ laps) get tagged as workouts on Strava. Races take priority.
+- **Stopwatch activities skipped** — Garmin `stop_watch` type has no useful data for Strava, silently skipped during push.
+- **Strava rate limits** — personal apps get 200 req/15min (100 read), 2000/day. Each upload uses ~2 calls. Defaults: 180/15min, 1800/day.
 
 ## Style
 
