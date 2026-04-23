@@ -473,7 +473,8 @@ def push_strava(
         if rate_limiter.short_window_exhausted():
             wait = rate_limiter.wait_time()
             console.print(
-                f"\n[yellow]15-min rate limit reached. Waiting {wait:.0f}s...[/yellow]"
+                f"\n[yellow]15-min rate limit reached ({rate_limiter.status()}). "
+                f"Waiting {wait:.0f}s...[/yellow]"
             )
             time.sleep(wait)
 

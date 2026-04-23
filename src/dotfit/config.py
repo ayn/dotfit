@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     garmin_password: str = ""
     archive_dir: Path = Path("./archive")
     config_dir: Path = Path.home() / ".config" / "dotfit"
-    strava_rate_limit_15min: int = 90
-    strava_rate_limit_daily: int = 900
+    strava_rate_limit_15min: int = 200
+    strava_rate_limit_daily: int = 2000
     strava_session_cookie: str = ""
     strava_download_delay: float = 1.5
 
