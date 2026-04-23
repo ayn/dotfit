@@ -556,8 +556,22 @@ def push_strava(
 def _maybe_set_workout_type(
     strava: StravaClient, strava_id: int, rec, strava_type: str | None
 ) -> None:
-    """Set Strava workout_type if Garmin event indicates a workout or race."""
-    wt = get_workout_type(rec.event_type, strava_type)
+    """Set Strava workout_type based on event type, activity type, name, or FIT contents."""
+    from dotfit.fit_utils import has_intervals
+
+    wt = get_workout_type(
+        rec.event_type,
+        strava_type,
+        activity_type=rec.activity_type,
+        activity_name=rec.activity_name,
+    )
+
+    # If no workout tag yet, check FIT file for structured intervals
+    if wt is None and rec.file_path and Path(rec.file_path).exists():
+        if has_intervals(Path(rec.file_path)):
+            sport_types = {"run": 3, "ride": 12}
+            wt = sport_types.get(strava_type)
+
     if wt is not None:
         try:
             strava.update_activity(strava_id, workout_type=wt)

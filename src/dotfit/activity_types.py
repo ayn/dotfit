@@ -131,18 +131,55 @@ def extract_garmin_id(external_id: str | None) -> int | None:
     return None
 
 
-def get_workout_type(garmin_event_type: str, strava_sport: str | None) -> int | None:
-    """Return a Strava workout_type int if the Garmin event indicates a workout or race."""
-    if not strava_sport or not garmin_event_type:
+# Activity types that are inherently workouts (always tag as workout on Strava)
+ALWAYS_WORKOUT_TYPES: set[str] = {
+    "track_running",
+}
+
+# Substrings in activity name that indicate a workout
+WORKOUT_NAME_PATTERNS: list[str] = [
+    "track running",
+]
+
+
+def get_workout_type(
+    garmin_event_type: str,
+    strava_sport: str | None,
+    *,
+    activity_type: str | None = None,
+    activity_name: str | None = None,
+) -> int | None:
+    """Return a Strava workout_type int if the activity should be tagged.
+
+    Checks (in order):
+    1. Explicit race/training event type from Garmin
+    2. Activity type that is inherently a workout (e.g. track_running)
+    3. Activity name containing workout indicators (e.g. "Track Running")
+    """
+    if not strava_sport:
         return None
 
     sport_types = STRAVA_WORKOUT_TYPES.get(strava_sport)
     if not sport_types:
         return None
 
-    event = garmin_event_type.lower().strip()
-    if "training" in event or "workout" in event:
+    # Check explicit event type first — race takes priority
+    if garmin_event_type:
+        event = garmin_event_type.lower().strip()
+        if "race" in event:
+            return sport_types.get("race")
+        if "training" in event or "workout" in event:
+            return sport_types.get("workout")
+
+    # Activity types that are always workouts
+    if activity_type and activity_type.lower().strip() in ALWAYS_WORKOUT_TYPES:
         return sport_types.get("workout")
-    if "race" in event:
-        return sport_types.get("race")
+
+    # Name-based detection (e.g. "Shilin District Track Running")
+    if activity_name:
+        name_lower = activity_name.lower()
+        for pattern in WORKOUT_NAME_PATTERNS:
+            if pattern in name_lower:
+                return sport_types.get("workout")
+
     return None
