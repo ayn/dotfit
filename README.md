@@ -141,21 +141,21 @@ STRAVA_SESSION_COOKIE=<paste here>
 
 Strava enforces two rate-limit windows:
 
-| Window    | Default limit | Our default |
-|-----------|--------------|-------------|
-| 15 minute | 600 requests | 90 uploads  |
-| Daily     | 30,000 req   | 900 uploads |
+| Window    | Strava limit (personal app) | Our default |
+|-----------|----------------------------|-------------|
+| 15 minute | 200 requests (100 read)    | 180         |
+| Daily     | 2,000 requests             | 1,800       |
 
-The tool tracks usage via Strava's `X-RateLimit-*` response headers and pauses automatically:
+Each upload uses ~2 API calls (1 write + 1 read poll), so the default of 180 allows ~90 uploads per 15-minute window. The tool tracks usage via Strava's `X-RateLimit-*` response headers and pauses automatically:
 
 - **15-min limit hit**: waits until the next quarter-hour, then resumes
 - **Daily limit hit**: saves progress, exits cleanly with a message about when to re-run
 
-Override the conservative defaults via environment variables:
+Override via environment variables:
 
 ```
-STRAVA_RATE_LIMIT_15MIN=150
-STRAVA_RATE_LIMIT_DAILY=1500
+STRAVA_RATE_LIMIT_15MIN=180
+STRAVA_RATE_LIMIT_DAILY=1800
 ```
 
 ## Activity type mapping
