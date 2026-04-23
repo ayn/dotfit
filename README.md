@@ -66,6 +66,8 @@ Sessions and tokens are saved to `~/.config/dotfit/` for reuse.
 
 ## Usage
 
+> If you installed with `uv sync`, prefix commands with `uv run` (e.g. `uv run dotfit pull-garmin`), or activate the venv first with `source .venv/bin/activate`.
+
 ```bash
 # Download all activities from Garmin
 dotfit pull-garmin
