@@ -588,9 +588,8 @@ def sync(
     before: str = typer.Option(None, help="Only activities before this date"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Run pull-garmin, pull-strava, and push-strava in sequence."""
+    """Pull from Garmin and push to Strava (pull-garmin + push-strava)."""
     pull_garmin(after=after, before=before, force=False, verbose=verbose)
-    pull_strava(after=after, before=before, verbose=verbose)
     push_strava(after=after, before=before, retry_failed=False, verbose=verbose)
 
 
