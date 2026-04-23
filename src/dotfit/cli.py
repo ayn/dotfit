@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import certifi
 import typer
+
+# Set SSL cert path before any network libraries load — fixes macOS where
+# curl-cffi looks for /etc/ssl/certs/ca-certificates.crt (a Linux path).
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+os.environ.setdefault("CURL_CA_BUNDLE", certifi.where())
 from rich.console import Console
 from rich.table import Table
 

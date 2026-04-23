@@ -20,11 +20,11 @@ class GarminClient:
         self.client: Garmin | None = None
 
     def login(self, email: str, password: str) -> None:
-        """Interactive login with email/password. Handles MFA via garth."""
-        self.client = Garmin(email, password)
-        self.client.login()
+        """Interactive login with email/password. Handles MFA."""
         self.token_dir.mkdir(parents=True, exist_ok=True)
-        self.client.garth.dump(str(self.token_dir))
+        self.client = Garmin(email, password)
+        # login() with a tokenstore path will save tokens automatically on success
+        self.client.login(tokenstore=str(self.token_dir))
         logger.info("Garmin session saved to %s", self.token_dir)
 
     def resume_session(self) -> bool:
