@@ -206,10 +206,15 @@ class StravaClient:
         name: str | None = None,
         activity_type: str | None = None,
         external_id: str | None = None,
-        poll_interval: float = 2.0,
-        max_polls: int = 30,
+        initial_wait: float = 4.0,
+        poll_interval: float = 5.0,
+        max_polls: int = 10,
     ) -> UploadResult:
-        """Upload a FIT file and wait for Strava to process it."""
+        """Upload a FIT file and wait for Strava to process it.
+
+        Uses a longer initial wait and fewer polls to conserve read API quota
+        (Strava limits read requests to 100/15min on personal apps).
+        """
         resp = self._post_upload(fit_path, name, activity_type, external_id)
 
         if resp.status_code == 429:
@@ -221,17 +226,24 @@ class StravaClient:
 
         body = resp.json()
 
-        # Check for immediate duplicate detection
+        # Check for immediate duplicate/error detection
         if body.get("error"):
             return self._handle_upload_error(body)
+        if body.get("activity_id"):
+            return UploadResult(
+                status="success",
+                upload_id=body.get("id"),
+                strava_activity_id=body["activity_id"],
+            )
 
         upload_id = body.get("id")
         if not upload_id:
             return UploadResult(status="error", error="No upload ID in response")
 
-        # Poll until processed
+        # Wait longer before first poll — most uploads finish in 3-5s
+        time.sleep(initial_wait)
+
         for _ in range(max_polls):
-            time.sleep(poll_interval)
             status_body = self._get_upload_status(upload_id)
 
             if status_body.get("activity_id"):
@@ -243,6 +255,8 @@ class StravaClient:
 
             if status_body.get("error"):
                 return self._handle_upload_error(status_body)
+
+            time.sleep(poll_interval)
 
         return UploadResult(
             status="error",
