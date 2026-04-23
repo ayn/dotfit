@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.table import Table
 
 from dotfit.activity_types import (
+    SKIP_UPLOAD_TYPES,
     extract_garmin_id,
     get_workout_type,
     infer_source,
@@ -475,6 +476,15 @@ def push_strava(
                 f"\n[yellow]15-min rate limit reached. Waiting {wait:.0f}s...[/yellow]"
             )
             time.sleep(wait)
+
+        # Skip activity types that have no useful data for Strava
+        if rec.activity_type and rec.activity_type.lower() in SKIP_UPLOAD_TYPES:
+            console.print(
+                f"  [{i}/{len(pending)}] {rec.activity_name} ({rec.start_time[:10]}) "
+                "[dim]skipped (stopwatch/no data)[/dim]"
+            )
+            state.mark_uploaded_to_strava(rec.garmin_id, None, None)
+            continue
 
         # Map activity type
         strava_type, is_known = map_activity_type(rec.activity_type)

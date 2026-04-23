@@ -67,6 +67,12 @@ GARMIN_TO_STRAVA: dict[str, str | None] = {
     "multi_sport": None,
     "transition": None,
     "other": None,
+    "stopwatch": None,
+}
+
+# Activity types that should be skipped during upload (no useful data for Strava)
+SKIP_UPLOAD_TYPES: set[str] = {
+    "stopwatch",
 }
 
 # Strava workout_type enum values by sport
