@@ -277,6 +277,45 @@ class StravaClient:
             error=str(error),
         )
 
+    # ── Activity listing ────────────────────────────────────────────────
+
+    def list_activities(
+        self, after: float | None = None, per_page: int = 200
+    ) -> list[dict]:
+        """List the authenticated user's activities.
+
+        Args:
+            after: Unix epoch timestamp — only return activities after this time.
+            per_page: Page size (max 200).
+
+        Returns list of Strava SummaryActivity dicts.
+        """
+        all_activities: list[dict] = []
+        page = 1
+        while True:
+            params: dict[str, int] = {"page": page, "per_page": per_page}
+            if after is not None:
+                params["after"] = int(after)
+
+            resp = httpx.get(
+                f"{STRAVA_API_BASE}/athlete/activities",
+                headers=self._auth_headers(),
+                params=params,
+                timeout=30,
+            )
+            self.rate_limiter.update_from_headers(dict(resp.headers))
+            resp.raise_for_status()
+
+            batch = resp.json()
+            if not batch:
+                break
+            all_activities.extend(batch)
+            if len(batch) < per_page:
+                break
+            page += 1
+
+        return all_activities
+
     # ── Activity update (for workout type) ────────────────────────────
 
     def update_activity(self, activity_id: int, **kwargs) -> dict:

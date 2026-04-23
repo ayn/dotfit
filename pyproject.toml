@@ -36,6 +36,9 @@ select = ["E", "F", "I", "W"]
 testpaths = ["tests"]
 
 [project.optional-dependencies]
+browser = [
+    "browser-cookie3>=0.12",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.5",

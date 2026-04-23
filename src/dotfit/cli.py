@@ -5,24 +5,30 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from dotfit.activity_types import get_workout_type, map_activity_type
+from dotfit.activity_types import (
+    extract_garmin_id,
+    get_workout_type,
+    infer_source,
+    map_activity_type,
+)
 from dotfit.archive import Archive
 from dotfit.config import get_settings
 from dotfit.garmin import GarminClient
 from dotfit.ratelimit import RateLimiter
 from dotfit.state import StateManager
 from dotfit.strava import StravaClient
+from dotfit.strava_download import SessionExpiredError, StravaDownloader
 
 app = typer.Typer(
     name="dotfit",
-    help="Mirror Garmin Connect activity history to Strava.",
+    help="Local .fit archive with bidirectional Garmin/Strava sync.",
     no_args_is_help=True,
 )
 auth_app = typer.Typer(help="Authenticate with Garmin or Strava.")
@@ -108,11 +114,41 @@ def auth_strava() -> None:
     console.print(f"Tokens saved to {client.token_path}")
 
 
-# ── Pull ──────────────────────────────────────────────────────────────
+@auth_app.command("strava-cookie")
+def auth_strava_cookie() -> None:
+    """Test Strava session cookie for pull-strava downloads."""
+    _setup_logging()
+    settings = get_settings()
+
+    cookie = settings.strava_session_cookie
+    if not cookie:
+        console.print("No STRAVA_SESSION_COOKIE in env. Trying browser cookies...")
+        try:
+            downloader = StravaDownloader.create(download_delay=0)
+            cookie = downloader.session_cookie
+        except RuntimeError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+    else:
+        console.print("Using STRAVA_SESSION_COOKIE from environment.")
+        downloader = StravaDownloader(cookie)
+
+    console.print("Testing cookie against strava.com...")
+    if downloader.test_cookie():
+        console.print("[green]Session cookie is valid.[/green]")
+    else:
+        console.print(
+            "[red]Session cookie is invalid or expired.[/red]\n"
+            "Log into strava.com in your browser (Firefox recommended on macOS) and retry."
+        )
+        raise typer.Exit(1)
 
 
-@app.command()
-def pull(
+# ── Pull from Garmin ──────────────────────────────────────────────────
+
+
+@app.command("pull-garmin")
+def pull_garmin(
     after: str = typer.Option(None, help="Only activities after this date (YYYY-MM-DD)"),
     before: str = typer.Option(None, help="Only activities before this date (YYYY-MM-DD)"),
     force: bool = typer.Option(False, help="Re-download FIT files already on disk"),
@@ -141,7 +177,9 @@ def pull(
     for act in activities:
         act_id = act["activityId"]
         start = act.get("startTimeLocal", "")
-        if not force and (state.get(act_id) or archive.has_fit(act_id, start)):
+        if not force and (
+            state.get_by_garmin_id(act_id) or archive.has_fit(act_id, start)
+        ):
             continue
         to_download.append(act)
 
@@ -168,11 +206,10 @@ def pull(
             dest = archive.fit_path(act_id, start)
             garmin.download_fit(act_id, dest)
 
-            # Save Garmin metadata alongside the FIT
             meta = archive.metadata_path(act_id, start)
             meta.write_text(json.dumps(act, indent=2, default=str))
 
-            state.mark_downloaded(
+            state.mark_downloaded_from_garmin(
                 garmin_id=act_id,
                 file_path=str(dest),
                 name=name,
@@ -191,7 +228,7 @@ def pull(
                 skipped += 1
             else:
                 console.print(f"[red]FAILED: {e}[/red]")
-                state.mark_downloaded(
+                state.mark_downloaded_from_garmin(
                     garmin_id=act_id,
                     file_path="",
                     name=name,
@@ -199,7 +236,7 @@ def pull(
                     event_type=event_type,
                     start_time=start,
                 )
-                state.mark_failed(act_id, str(e))
+                state.mark_failed(str(e), garmin_id=act_id)
                 state.save()
 
     console.print(
@@ -208,11 +245,160 @@ def pull(
     )
 
 
-# ── Push ──────────────────────────────────────────────────────────────
+# ── Pull from Strava ──────────────────────────────────────────────────
 
 
-@app.command()
-def push(
+@app.command("pull-strava")
+def pull_strava(
+    after: str = typer.Option(
+        None, help="Only activities after this date (YYYY-MM-DD)"
+    ),
+    before: str = typer.Option(
+        None, help="Only activities before this date (YYYY-MM-DD)"
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Download original .fit files from Strava into the local archive.
+
+    Useful for archiving activities from watches (e.g. Coros) that auto-sync
+    to Strava but don't offer a direct export API. Smart dedup skips activities
+    already present from Garmin or previous pulls.
+    """
+    _setup_logging(verbose)
+    settings = get_settings()
+
+    # Need both OAuth client (for listing) and cookie client (for download)
+    strava, rate_limiter = _make_strava_client(settings)
+
+    try:
+        downloader = StravaDownloader.create(
+            session_cookie=settings.strava_session_cookie,
+            download_delay=settings.strava_download_delay,
+        )
+    except RuntimeError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    archive = Archive(settings.archive_dir)
+    state = StateManager(settings.archive_dir)
+
+    # Determine the "after" timestamp for the API call
+    after_epoch = None
+    if after:
+        after_epoch = datetime.strptime(after, "%Y-%m-%d").replace(
+            tzinfo=timezone.utc
+        ).timestamp()
+    elif state.last_strava_pull:
+        after_epoch = datetime.fromisoformat(state.last_strava_pull).timestamp()
+
+    before_epoch = None
+    if before:
+        before_epoch = datetime.strptime(before, "%Y-%m-%d").replace(
+            tzinfo=timezone.utc
+        ).timestamp()
+
+    console.print("Listing activities from Strava...")
+    activities = strava.list_activities(after=after_epoch)
+
+    # Filter by before date if specified
+    if before_epoch:
+        activities = [
+            a for a in activities
+            if datetime.fromisoformat(
+                a["start_date"].replace("Z", "+00:00")
+            ).timestamp() <= before_epoch
+        ]
+
+    console.print(f"Found [bold]{len(activities)}[/bold] activities on Strava.\n")
+
+    downloaded = 0
+    skipped = 0
+    failed = 0
+    linked = 0
+
+    for i, act in enumerate(activities, 1):
+        strava_id = act["id"]
+        name = act.get("name", f"Activity {strava_id}")
+        start_date = act.get("start_date", "")
+        external_id = act.get("external_id")
+        sport_type = act.get("sport_type", "")
+
+        console.print(f"  [{i}/{len(activities)}] {name} ({start_date[:10]}) ", end="")
+
+        # Already known by strava_id?
+        if state.get_by_strava_id(strava_id):
+            console.print("[dim]already tracked[/dim]")
+            skipped += 1
+            continue
+
+        # Dedup: try external_id → garmin_id match
+        garmin_id = extract_garmin_id(external_id)
+        if garmin_id and state.get_by_garmin_id(garmin_id):
+            key = state._garmin_idx[garmin_id]
+            state.link_strava_to_existing(key, strava_id, external_id)
+            state.save()
+            console.print(f"[cyan]linked to garmin:{garmin_id}[/cyan]")
+            linked += 1
+            continue
+
+        # Dedup: fuzzy start_time match (±30s) — only link to pre-existing records
+        # (not ones we just downloaded from Strava in this same run)
+        existing, existing_key = state.find_by_start_time(start_date, tolerance_seconds=30)
+        if existing and existing_key and existing.downloaded_from != "strava":
+            state.link_strava_to_existing(existing_key, strava_id, external_id)
+            state.save()
+            console.print("[cyan]linked by time match[/cyan]")
+            linked += 1
+            continue
+
+        # New activity — download original file
+        source = infer_source(external_id)
+        dest_dir = archive.strava_path(start_date, source).parent
+        filename_stem = archive._compact_time(start_date) + f"_{source}"
+
+        try:
+            file_path, ext = downloader.download_original(strava_id, dest_dir, filename_stem)
+
+            state.mark_downloaded_from_strava(
+                strava_id=strava_id,
+                file_path=str(file_path),
+                file_ext=ext,
+                name=name,
+                activity_type=sport_type,
+                start_time=start_date,
+                source=source,
+                external_id=external_id,
+            )
+            state.save()
+            downloaded += 1
+            console.print(f"[green]OK[/green] ({source}, .{ext})")
+
+        except SessionExpiredError as e:
+            console.print(f"\n[red]{e}[/red]")
+            state.save()
+            raise typer.Exit(1)
+
+        except Exception as e:
+            console.print(f"[red]FAILED: {e}[/red]")
+            state.mark_failed(str(e), strava_id=strava_id)
+            state.save()
+            failed += 1
+
+    # Update last_strava_pull timestamp
+    state.last_strava_pull = datetime.now(timezone.utc).isoformat()
+    state.save()
+
+    console.print(
+        f"\n[bold]Done.[/bold] Downloaded: {downloaded}, "
+        f"Linked: {linked}, Skipped: {skipped}, Failed: {failed}"
+    )
+
+
+# ── Push to Strava ────────────────────────────────────────────────────
+
+
+@app.command("push-strava")
+def push_strava(
     after: str = typer.Option(None, help="Only upload activities after this date"),
     before: str = typer.Option(None, help="Only upload activities before this date"),
     retry_failed: bool = typer.Option(
@@ -228,19 +414,17 @@ def push(
     state = StateManager(settings.archive_dir)
 
     if retry_failed:
-        pending = state.failed_uploads()
+        pending = state.failed_strava_uploads()
         console.print(f"Retrying [bold]{len(pending)}[/bold] previously failed uploads...")
     else:
-        pending = state.pending_uploads()
+        pending = state.pending_strava_uploads()
 
     # Apply date filters
     if after or before:
         after_str = after or ""
         before_str = before or "9999"
         pending = [
-            r
-            for r in pending
-            if after_str <= r.start_time[:10] <= before_str
+            r for r in pending if after_str <= r.start_time[:10] <= before_str
         ]
 
     if not pending:
@@ -287,21 +471,23 @@ def push(
 
         if not rec.file_path or not Path(rec.file_path).exists():
             console.print("[red]FIT file missing[/red]")
-            state.mark_failed(rec.garmin_activity_id, "FIT file not found on disk")
+            state.mark_failed("FIT file not found on disk", garmin_id=rec.garmin_id)
             failed += 1
             continue
 
+        ext_id = str(rec.garmin_id) if rec.garmin_id else None
         result = strava.upload_activity(
             fit_path=Path(rec.file_path),
             name=rec.activity_name or None,
             activity_type=strava_type,
-            external_id=str(rec.garmin_activity_id),
+            external_id=ext_id,
         )
 
         if result.status == "success":
-            state.mark_uploaded(
-                rec.garmin_activity_id, result.upload_id, result.strava_activity_id
-            )
+            if rec.garmin_id:
+                state.mark_uploaded_to_strava(
+                    rec.garmin_id, result.upload_id, result.strava_activity_id
+                )
             uploaded += 1
             console.print(
                 f"[green]OK[/green] (strava:{result.strava_activity_id})"
@@ -312,29 +498,31 @@ def push(
                 _maybe_set_workout_type(strava, result.strava_activity_id, rec, strava_type)
 
         elif result.status == "duplicate":
-            state.mark_duplicate(rec.garmin_activity_id, result.strava_activity_id)
+            state.mark_duplicate(
+                garmin_id=rec.garmin_id, strava_id=result.strava_activity_id
+            )
             duplicates += 1
             sid = result.strava_activity_id or "?"
             console.print(f"[yellow]duplicate[/yellow] (strava:{sid})")
 
         elif result.status == "rate_limited":
             console.print("[yellow]rate limited[/yellow]")
-            wait = rate_limiter.wait_time()
             if rate_limiter.daily_exhausted():
                 console.print(
                     "\n[yellow]Daily limit reached. Re-run later.[/yellow]"
                 )
                 state.save()
                 raise typer.Exit(0)
+            wait = rate_limiter.wait_time()
             console.print(f"  Waiting {wait:.0f}s for rate limit window...")
             time.sleep(wait)
-            # Will retry on next loop iteration... but we already moved past this one.
-            # Mark as failed so --retry-failed picks it up.
-            state.mark_failed(rec.garmin_activity_id, "Rate limited, retry later")
+            state.mark_failed("Rate limited, retry later", garmin_id=rec.garmin_id)
             failed += 1
 
         else:
-            state.mark_failed(rec.garmin_activity_id, result.error or "Unknown error")
+            state.mark_failed(
+                result.error or "Unknown error", garmin_id=rec.garmin_id
+            )
             failed += 1
             console.print(f"[red]FAILED: {result.error}[/red]")
 
@@ -378,9 +566,10 @@ def sync(
     before: str = typer.Option(None, help="Only activities before this date"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Pull from Garmin then push to Strava (pull + push)."""
-    pull(after=after, before=before, force=False, verbose=verbose)
-    push(after=after, before=before, retry_failed=False, verbose=verbose)
+    """Run pull-garmin, pull-strava, and push-strava in sequence."""
+    pull_garmin(after=after, before=before, force=False, verbose=verbose)
+    pull_strava(after=after, before=before, verbose=verbose)
+    push_strava(after=after, before=before, retry_failed=False, verbose=verbose)
 
 
 # ── Upload (single file) ─────────────────────────────────────────────
@@ -437,40 +626,40 @@ def status(
     state = StateManager(settings.archive_dir)
 
     counts = state.counts()
-    total = sum(counts.values())
 
-    if total == 0:
-        console.print("No activities tracked yet. Run [bold]dotfit pull[/bold] first.")
+    if counts["total"] == 0:
+        console.print("No activities tracked yet. Run [bold]dotfit pull-garmin[/bold] first.")
         return
 
     table = Table(title="Sync Status")
-    table.add_column("Status", style="bold")
+    table.add_column("Metric", style="bold")
     table.add_column("Count", justify="right")
 
-    status_styles = {
-        "downloaded": "cyan",
-        "uploaded": "green",
-        "duplicate": "yellow",
-        "failed": "red",
-        "pending": "dim",
-    }
-    for s in ("downloaded", "uploaded", "duplicate", "failed", "pending"):
-        count = counts.get(s, 0)
-        style = status_styles.get(s, "")
-        table.add_row(f"[{style}]{s}[/{style}]", str(count))
+    rows = [
+        ("Downloaded from Garmin", counts["downloaded_garmin"], "cyan"),
+        ("Downloaded from Strava", counts["downloaded_strava"], "cyan"),
+        ("Uploaded to Strava", counts["uploaded_to_strava"], "green"),
+        ("Pending upload", counts["pending_upload"], "yellow"),
+        ("Failed", counts["failed"], "red"),
+        ("Total activities", counts["total"], "bold"),
+    ]
+    for label, count, style in rows:
+        table.add_row(f"[{style}]{label}[/{style}]", str(count))
 
-    table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
     console.print(table)
 
+    if state.last_strava_pull:
+        console.print(f"\nLast Strava pull: {state.last_strava_pull}")
+
     # Show failed activities
-    failed = state.failed_uploads()
+    failed = state.failed_strava_uploads()
     if failed:
         console.print(f"\n[red]Failed uploads ({len(failed)}):[/red]")
         for rec in failed[:20]:
             console.print(f"  {rec.activity_name} — {rec.error}")
         if len(failed) > 20:
             console.print(f"  ... and {len(failed) - 20} more")
-        console.print("\nRetry with: [bold]dotfit push --retry-failed[/bold]")
+        console.print("\nRetry with: [bold]dotfit push-strava --retry-failed[/bold]")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -478,7 +667,9 @@ def status(
 
 def _make_strava_client(settings) -> tuple[StravaClient, RateLimiter]:
     if not settings.strava_client_id or not settings.strava_client_secret:
-        console.print("[red]Error:[/red] Set STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET in .env")
+        console.print(
+            "[red]Error:[/red] Set STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET in .env"
+        )
         raise typer.Exit(1)
 
     rate_limiter = RateLimiter(settings.strava_rate_limit_15min, settings.strava_rate_limit_daily)

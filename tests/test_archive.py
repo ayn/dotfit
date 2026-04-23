@@ -47,3 +47,21 @@ def test_different_months_different_dirs(tmp_path):
     assert jan.parent != dec.parent
     assert "01" in str(jan)
     assert "12" in str(dec)
+
+
+def test_strava_path(tmp_path):
+    archive = Archive(tmp_path)
+    path = archive.strava_path("2024-03-12T07:15:00Z", "coros", "fit")
+    assert path == tmp_path / "activities" / "2024" / "03" / "20240312-071500_coros.fit"
+
+
+def test_strava_path_gpx(tmp_path):
+    archive = Archive(tmp_path)
+    path = archive.strava_path("2024-06-01 08:30:00", "strava", "gpx")
+    assert path == tmp_path / "activities" / "2024" / "06" / "20240601-083000_strava.gpx"
+
+
+def test_compact_time():
+    assert Archive._compact_time("2024-03-12T07:15:00Z") == "20240312-071500"
+    assert Archive._compact_time("2024-03-12 07:15:00") == "20240312-071500"
+    assert Archive._compact_time("2024-06-01T08:30:45Z") == "20240601-083045"

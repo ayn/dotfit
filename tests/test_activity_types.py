@@ -1,6 +1,11 @@
 """Tests for activity type mapping."""
 
-from dotfit.activity_types import get_workout_type, map_activity_type
+from dotfit.activity_types import (
+    extract_garmin_id,
+    get_workout_type,
+    infer_source,
+    map_activity_type,
+)
 
 
 class TestMapActivityType:
@@ -76,3 +81,53 @@ class TestGetWorkoutType:
 
     def test_no_sport(self):
         assert get_workout_type("training", None) is None
+
+
+class TestInferSource:
+    def test_garmin_push_prefix(self):
+        assert infer_source("garmin_push_123456789") == "garmin"
+
+    def test_garmin_prefix(self):
+        assert infer_source("garmin_abc") == "garmin"
+
+    def test_pure_numeric(self):
+        assert infer_source("123456789") == "garmin"
+
+    def test_coros(self):
+        assert infer_source("coros_abc123_fit") == "coros"
+
+    def test_wahoo(self):
+        assert infer_source("wahoo_upload_456") == "wahoo"
+
+    def test_zwift(self):
+        assert infer_source("zwift_activity_789") == "zwift"
+
+    def test_suunto(self):
+        assert infer_source("suunto_move_abc") == "suunto"
+
+    def test_no_external_id(self):
+        assert infer_source(None) == "strava"
+        assert infer_source("") == "strava"
+
+    def test_unknown(self):
+        assert infer_source("some_random_device_id") == "unknown"
+
+
+class TestExtractGarminId:
+    def test_garmin_push_format(self):
+        assert extract_garmin_id("garmin_push_123456789") == 123456789
+
+    def test_pure_numeric(self):
+        assert extract_garmin_id("987654321") == 987654321
+
+    def test_none(self):
+        assert extract_garmin_id(None) is None
+
+    def test_empty(self):
+        assert extract_garmin_id("") is None
+
+    def test_non_garmin(self):
+        assert extract_garmin_id("coros_abc123") is None
+
+    def test_garmin_push_non_numeric(self):
+        assert extract_garmin_id("garmin_push_abc") is None

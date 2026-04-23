@@ -89,6 +89,48 @@ def map_activity_type(garmin_type_key: str) -> tuple[str | None, bool]:
     return None, False
 
 
+def infer_source(external_id: str | None) -> str:
+    """Infer activity source from Strava's external_id field."""
+    if not external_id:
+        return "strava"
+    eid = external_id.lower().strip()
+    if eid.startswith("garmin_push_") or eid.startswith("garmin_"):
+        return "garmin"
+    if eid.isdigit():
+        return "garmin"  # likely uploaded via dotfit or Garmin Connect sync
+    if "coros" in eid:
+        return "coros"
+    if "wahoo" in eid:
+        return "wahoo"
+    if "zwift" in eid:
+        return "zwift"
+    if "suunto" in eid:
+        return "suunto"
+    if "polar" in eid:
+        return "polar"
+    return "unknown"
+
+
+def extract_garmin_id(external_id: str | None) -> int | None:
+    """Try to extract a Garmin activity ID from Strava's external_id."""
+    if not external_id:
+        return None
+    eid = external_id.strip()
+    # garmin_push_123456789
+    if eid.lower().startswith("garmin_push_"):
+        try:
+            return int(eid[12:])
+        except ValueError:
+            return None
+    # Pure numeric — likely a garmin ID from our own uploads
+    if eid.isdigit():
+        try:
+            return int(eid)
+        except ValueError:
+            return None
+    return None
+
+
 def get_workout_type(garmin_event_type: str, strava_sport: str | None) -> int | None:
     """Return a Strava workout_type int if the Garmin event indicates a workout or race."""
     if not strava_sport or not garmin_event_type:

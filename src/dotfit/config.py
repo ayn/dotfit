@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     config_dir: Path = Path.home() / ".config" / "dotfit"
     strava_rate_limit_15min: int = 90
     strava_rate_limit_daily: int = 900
+    strava_session_cookie: str = ""
+    strava_download_delay: float = 1.5
 
 
 _settings: Settings | None = None
