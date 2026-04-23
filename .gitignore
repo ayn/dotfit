@@ -1,0 +1,39 @@
+# Credentials and tokens
+.env
+.tokens/
+*.token
+*.secret
+
+# Downloaded activity archive
+archive/
+.state.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
