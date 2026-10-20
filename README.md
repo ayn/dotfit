@@ -17,6 +17,13 @@ Organizes a local archive: `archive/activities/YYYY/MM/<id>.fit`
 
 Requires Python 3.11+.
 
+Prefer Python 3.12+ for Garmin work: the lockfile uses `garminconnect`
+0.3.19 there, while Python 3.11 retains the older compatible 0.3.2.
+After pulling updates, run `uv sync --all-extras --locked`.
+Versions 0.3.x use `garmin_tokens.json`; older garth OAuth1/OAuth2 sessions
+cannot be converted and require a fresh interactive login. Verify the
+account before syncing, and keep each person's config directory separate.
+
 ```bash
 git clone https://github.com/YOUR_USER/dotfit.git
 cd dotfit
